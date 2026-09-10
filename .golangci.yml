@@ -1,8 +1,24 @@
 version: "2"
 
-linters:
-  default: standard
+formatters:
   enable:
+    - gci # enforces 3-group import ordering: stdlib, 3rd-party, local
+    - gofmt
+    - goimports
+  settings:
+    gci:
+      sections:
+        - standard
+        - default
+        - prefix(pigeon)
+      custom-order: true
+      no-inline-comments: true
+      no-prefix-comments: true
+
+linters:
+  default: none
+  enable:
+    # correctness / bugs
     - errcheck
     - govet
     - staticcheck
@@ -11,21 +27,63 @@ linters:
     - revive
     - bodyclose
     - noctx
+    # style / hygiene
+    - misspell
+    - lll
+    - embeddedstructfieldcheck
+    - usestdlibvars
+    - whitespace
+    - godot
+    - ineffassign
+    - dupword
+    - asciicheck
+    - gocheckcompilerdirectives
+    - godoclint
+    - inamedparam
+    - grouper
+    - tagalign
+  exclusions:
+    generated: lax
+    warn-unused: true
+    presets:
+      - comments
+      - std-error-handling
   settings:
     revive:
       rules:
         - name: exported
           disabled: false
-  exclusions:
-    presets:
-      - comments
-      - std-error-handling
-
-formatters:
-  enable:
-    - gofmt
-    - goimports
+    lll:
+      tab-width: 4
+    embeddedstructfieldcheck:
+      forbid-mutex: true
+    usestdlibvars:
+      time-month: true
+      time-layout: true
+      crypto-hash: true
+      default-rpc-path: true
+      sql-isolation-level: true
+      tls-signature-scheme: true
+    godoclint:
+      default: none
+      enable:
+        - pkg-doc
+        - single-pkg-doc
+        - no-unused-link
+    inamedparam:
+      skip-single-param: true
+    grouper:
+      import-require-single-import: true
+    tagalign:
+      align: false
+      sort: true
 
 issues:
   max-issues-per-linter: 0
   max-same-issues: 0
+  uniq-by-line: false
+  fix: false
+
+run:
+  timeout: 30s
+  tests: true
