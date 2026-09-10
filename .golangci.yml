@@ -49,6 +49,9 @@ linters:
       - comments
       - std-error-handling
   settings:
+    godot:
+      exclude:
+        - "^\\s*@" # swag annotations, not sentences
     revive:
       rules:
         - name: exported
