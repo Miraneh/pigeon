@@ -1,4 +1,4 @@
-package router
+package main
 
 import (
 	"github.com/gin-gonic/gin"
@@ -7,13 +7,12 @@ import (
 	"gorm.io/gorm"
 
 	_ "pigeon/docs"
-	"pigeon/internal/handler"
 )
 
-func New(db *gorm.DB) *gin.Engine {
+func newRouter(db *gorm.DB) *gin.Engine {
 	r := gin.Default()
 
-	r.GET("/ping", handler.Ping(db))
+	r.GET("/ping", pingHandler(db))
 	r.GET("/swagger/*any", ginswagger.WrapHandler(swaggerfiles.Handler))
 
 	return r

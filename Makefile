@@ -14,14 +14,14 @@ build:
 	go build ./...
 
 run:
-	go run ./cmd/api
+	go run ./cmd/server
 
 # regenerate swagger docs (needs swag: go install github.com/swaggo/swag/cmd/swag@latest)
 docs:
-	swag init -g cmd/api/main.go -o docs
+	swag init -g cmd/server/main.go -o docs
 
 up:
-	docker compose up --build
+	docker compose -f production/docker-compose.yml up --build
 
 down:
-	docker compose down -v
+	docker compose -f production/docker-compose.yml down -v

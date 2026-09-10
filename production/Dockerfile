@@ -10,7 +10,7 @@ RUN go mod download
 
 COPY . .
 
-RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/api ./cmd/api
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/server ./cmd/server
 
 FROM alpine:3.22 AS runtime
 
@@ -18,7 +18,7 @@ RUN apk add --no-cache ca-certificates && \
     addgroup -S -g 10001 app && \
     adduser -S -u 10001 -G app -H -D app
 
-COPY --from=builder --chown=app:app /out/api /app/api
+COPY --from=builder --chown=app:app /out/server /app/server
 
 USER app
 WORKDIR /app
@@ -28,4 +28,4 @@ EXPOSE 8080
 HEALTHCHECK --interval=10s --timeout=3s --retries=5 \
     CMD wget -q --spider http://localhost:8080/ping || exit 1
 
-ENTRYPOINT ["/app/api"]
+ENTRYPOINT ["/app/server"]

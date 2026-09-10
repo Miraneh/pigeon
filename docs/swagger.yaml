@@ -1,38 +1,7 @@
-basePath: /
-definitions:
-  handler.ErrorResponse:
-    properties:
-      error:
-        type: string
-    type: object
-  handler.PingResponse:
-    properties:
-      message:
-        type: string
-      time:
-        type: string
-    type: object
 info:
   contact: {}
-  title: Pigeon API
-  version: "1.0"
 paths:
   /ping:
     get:
-      description: Writes a heartbeat row to confirm the DB round trip works, then
-        returns pong.
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            $ref: '#/definitions/handler.PingResponse'
-        "500":
-          description: Internal Server Error
-          schema:
-            $ref: '#/definitions/handler.ErrorResponse'
-      summary: Ping
-      tags:
-      - ping
+      responses: {}
 swagger: "2.0"
