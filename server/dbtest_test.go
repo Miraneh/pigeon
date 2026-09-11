@@ -2,64 +2,78 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"os"
-	"sync"
 	"testing"
 	"time"
+
+	"github.com/testcontainers/testcontainers-go"
+	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
+	"github.com/testcontainers/testcontainers-go/wait"
 
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 	gormlogger "gorm.io/gorm/logger"
 )
 
-// Integration tests in this package need a real Postgres instance. They skip themselves when one isn't reachable.
-// `docker compose -f production/docker-compose.yml up -d db` starts one with matching credentials.
-
 var (
-	migrateTestDBOnce sync.Once
-	migrateTestDBErr  error
+	testDBURL     string
+	testDBSkipMsg string
 )
 
-func testDSN() string {
-	if v := os.Getenv("TEST_DATABASE_DSN"); v != "" {
-		return v
+func TestMain(m *testing.M) {
+	os.Exit(runTestMain(m))
+}
+
+func runTestMain(m *testing.M) int {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	container, err := tcpostgres.Run(ctx, "postgres:17-alpine",
+		tcpostgres.WithDatabase("pigeon"),
+		tcpostgres.WithUsername("pigeon"),
+		tcpostgres.WithPassword("pigeon"),
+		testcontainers.WithWaitStrategy(wait.ForListeningPort("5432/tcp").WithStartupTimeout(30*time.Second)),
+	)
+	if err != nil {
+		testDBSkipMsg = fmt.Sprintf("could not start postgres test container (is Docker running?): %v", err)
+		return m.Run()
 	}
-	return "host=localhost port=5432 user=pigeon password=pigeon dbname=pigeon sslmode=disable"
+	defer func() {
+		if err := testcontainers.TerminateContainer(container); err != nil {
+			fmt.Fprintf(os.Stderr, "terminate postgres test container: %v\n", err)
+		}
+	}()
+
+	connStr, err := container.ConnectionString(ctx, "sslmode=disable")
+	if err != nil {
+		testDBSkipMsg = fmt.Sprintf("get postgres test container connection string: %v", err)
+		return m.Run()
+	}
+	testDBURL = connStr
+
+	if err := runMigrations(testDBURL); err != nil {
+		fmt.Fprintf(os.Stderr, "run migrations against test container: %v\n", err)
+		return 1
+	}
+
+	return m.Run()
 }
 
 func testDatabaseURL() string {
-	if v := os.Getenv("TEST_DATABASE_URL"); v != "" {
-		return v
-	}
-	return "postgres://pigeon:pigeon@localhost:5432/pigeon?sslmode=disable"
+	return testDBURL
 }
 
-// openTestDB connects to the test Postgres instance, applies migrations once per test binary run, truncates the
-// pipeline tables, and returns a ready-to-use *gorm.DB. It skips the calling test when no database is reachable.
 func openTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
 
-	db, err := gorm.Open(postgres.Open(testDSN()), &gorm.Config{Logger: gormlogger.Default.LogMode(gormlogger.Silent)})
+	if testDBSkipMsg != "" {
+		t.Skip(testDBSkipMsg)
+	}
+
+	db, err := gorm.Open(postgres.Open(testDBURL), &gorm.Config{Logger: gormlogger.Default.LogMode(gormlogger.Silent)})
 	if err != nil {
-		t.Skipf("test postgres not reachable: %v", err)
-	}
-
-	sqlDB, err := db.DB()
-	if err != nil {
-		t.Skipf("test postgres not reachable: %v", err)
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	if err := sqlDB.PingContext(ctx); err != nil {
-		t.Skipf("test postgres not reachable: %v", err)
-	}
-
-	migrateTestDBOnce.Do(func() {
-		migrateTestDBErr = runMigrations(testDatabaseURL())
-	})
-	if migrateTestDBErr != nil {
-		t.Fatalf("run migrations: %v", migrateTestDBErr)
+		t.Fatalf("connect to test postgres: %v", err)
 	}
 
 	stmt := `TRUNCATE TABLE report_stats, balance_locks, identities RESTART IDENTITY CASCADE`
