@@ -88,5 +88,5 @@ issues:
   fix: false
 
 run:
-  timeout: 30s
+  timeout: 5m
   tests: true

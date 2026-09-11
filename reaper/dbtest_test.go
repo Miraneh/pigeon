@@ -2,17 +2,23 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"testing"
 	"time"
 
+	"github.com/golang-migrate/migrate/v4"
+	_ "github.com/golang-migrate/migrate/v4/database/postgres"
+	"github.com/golang-migrate/migrate/v4/source/iofs"
 	"github.com/testcontainers/testcontainers-go"
 	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
 	"github.com/testcontainers/testcontainers-go/wait"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 	gormlogger "gorm.io/gorm/logger"
+
+	"pigeon/migrations"
 )
 
 var (
@@ -51,7 +57,7 @@ func runTestMain(m *testing.M) int {
 	}
 	testDBURL = connStr
 
-	if err := runMigrations(testDBURL); err != nil {
+	if err := runTestMigrations(testDBURL); err != nil {
 		fmt.Fprintf(os.Stderr, "run migrations against test container: %v\n", err)
 		return 1
 	}
@@ -59,8 +65,21 @@ func runTestMain(m *testing.M) int {
 	return m.Run()
 }
 
-func testDatabaseURL() string {
-	return testDBURL
+func runTestMigrations(databaseURL string) error {
+	source, err := iofs.New(migrations.FS, ".")
+	if err != nil {
+		return err
+	}
+
+	m, err := migrate.NewWithSourceInstance("iofs", source, databaseURL)
+	if err != nil {
+		return err
+	}
+
+	if err := m.Up(); err != nil && !errors.Is(err, migrate.ErrNoChange) {
+		return err
+	}
+	return nil
 }
 
 func openTestDB(t *testing.T) *gorm.DB {

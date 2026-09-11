@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -44,7 +45,7 @@ func TestDBURL(t *testing.T) {
 	withFlagValue(t, dbNameFlag, "n")
 	withFlagValue(t, dbSSLModeFlag, "require")
 
-	want := "postgres://u:p@dbhost:1111/n?sslmode=require"
+	want := "postgres://u:p@dbhost:1111/n?sslmode=require" //nolint:gosec // fake fixture credentials, not real ones
 	if got := dbURL(); got != want {
 		t.Errorf("dbURL() = %q, want %q", got, want)
 	}
@@ -53,7 +54,7 @@ func TestDBURL(t *testing.T) {
 func TestPingHandler(t *testing.T) {
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
-	c.Request = httptest.NewRequest(http.MethodGet, "/ping", nil)
+	c.Request = httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/ping", nil)
 
 	pingHandler(c)
 
@@ -78,7 +79,9 @@ func TestSendHandler_InvalidJSONReturnsBadRequest(t *testing.T) {
 
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
-	c.Request = httptest.NewRequest(http.MethodPost, "/messages", bytes.NewBufferString(`{"identity_id": 1}`))
+	c.Request = httptest.NewRequestWithContext(
+		context.Background(), http.MethodPost, "/messages", bytes.NewBufferString(`{"identity_id": 1}`),
+	)
 	c.Request.Header.Set("Content-Type", "application/json")
 
 	h.sendMessages(c)
@@ -99,7 +102,9 @@ func TestSendHandler_TimesOutWaitingForAdmission(t *testing.T) {
 
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
-	c.Request = httptest.NewRequest(http.MethodPost, "/messages", bytes.NewReader(body))
+	c.Request = httptest.NewRequestWithContext(
+		context.Background(), http.MethodPost, "/messages", bytes.NewReader(body),
+	)
 	c.Request.Header.Set("Content-Type", "application/json")
 
 	h.sendMessages(c)
@@ -112,7 +117,7 @@ func TestSendHandler_TimesOutWaitingForAdmission(t *testing.T) {
 func TestNewRouter_PingRoute(t *testing.T) {
 	r := newRouter(nil, newAdmitterForTest(nil, time.Hour, 100))
 
-	req := httptest.NewRequest(http.MethodGet, "/ping", nil)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/ping", nil)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
@@ -126,7 +131,7 @@ func TestIdentityBalance_ReturnsBalance(t *testing.T) {
 	seedIdentity(t, db, 42, 250)
 
 	r := newRouter(db, newAdmitterForTest(db, time.Hour, 100))
-	req := httptest.NewRequest(http.MethodGet, "/identities/42", nil)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/identities/42", nil)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
@@ -145,7 +150,7 @@ func TestIdentityBalance_ReturnsBalance(t *testing.T) {
 
 func TestIdentityBalance_InvalidID(t *testing.T) {
 	r := newRouter(nil, newAdmitterForTest(nil, time.Hour, 100))
-	req := httptest.NewRequest(http.MethodGet, "/identities/not-a-number", nil)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/identities/not-a-number", nil)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
@@ -162,7 +167,9 @@ func TestIdentityTopup_CreditsNewIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal request: %v", err)
 	}
-	req := httptest.NewRequest(http.MethodPost, "/identities/7/topup", bytes.NewReader(body))
+	req := httptest.NewRequestWithContext(
+		context.Background(), http.MethodPost, "/identities/7/topup", bytes.NewReader(body),
+	)
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
@@ -184,7 +191,9 @@ func TestIdentityTopup_AddsToExistingBalance(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal request: %v", err)
 	}
-	req := httptest.NewRequest(http.MethodPost, "/identities/7/topup", bytes.NewReader(body))
+	req := httptest.NewRequestWithContext(
+		context.Background(), http.MethodPost, "/identities/7/topup", bytes.NewReader(body),
+	)
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
@@ -204,7 +213,9 @@ func TestIdentityTopup_RejectsNonPositiveAmount(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal request: %v", err)
 	}
-	req := httptest.NewRequest(http.MethodPost, "/identities/7/topup", bytes.NewReader(body))
+	req := httptest.NewRequestWithContext(
+		context.Background(), http.MethodPost, "/identities/7/topup", bytes.NewReader(body),
+	)
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)

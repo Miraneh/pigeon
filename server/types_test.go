@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -12,7 +13,7 @@ import (
 func bindJSON(t *testing.T, body string, target any) error {
 	t.Helper()
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
-	c.Request = httptest.NewRequest(http.MethodPost, "/", bytes.NewBufferString(body))
+	c.Request = httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/", bytes.NewBufferString(body))
 	c.Request.Header.Set("Content-Type", "application/json")
 	return c.ShouldBindJSON(target)
 }
