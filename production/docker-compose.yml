@@ -19,14 +19,14 @@ services:
     build:
       context: ..
       dockerfile: production/Dockerfile
-    environment:
-      APP_PORT: 8080
-      DB_HOST: db
-      DB_PORT: 5432
-      DB_USER: pigeon
-      DB_PASSWORD: pigeon
-      DB_NAME: pigeon
-      DB_SSLMODE: disable
+    command:
+      - --app-port=8080
+      - --db-host=db
+      - --db-port=5432
+      - --db-user=pigeon
+      - --db-password=pigeon
+      - --db-name=pigeon
+      - --db-sslmode=disable
     ports:
       - "8080:8080"
     depends_on:

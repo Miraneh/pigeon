@@ -4,13 +4,13 @@ FROM golang:1.27-alpine AS builder
 
 WORKDIR /src
 
-# go.mod/go.sum copied first so this layer only reruns when deps change, not on every source edit.
+# go.mod/go.sum copied first so this layer only reruns when deps change.
 COPY go.mod go.sum ./
 RUN go mod download
 
 COPY . .
 
-RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/server ./cmd/server
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/server ./server
 
 FROM alpine:3.22 AS runtime
 

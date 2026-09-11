@@ -15,6 +15,21 @@ const docTemplate = `{
     "host": "{{.Host}}",
     "basePath": "{{.BasePath}}",
     "paths": {
+        "/identities/{id}": {
+            "get": {
+                "responses": {}
+            }
+        },
+        "/identities/{id}/topup": {
+            "post": {
+                "responses": {}
+            }
+        },
+        "/messages": {
+            "post": {
+                "responses": {}
+            }
+        },
         "/ping": {
             "get": {
                 "responses": {}
