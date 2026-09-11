@@ -13,6 +13,12 @@ type pingRow struct {
 	CreatedAt time.Time
 }
 
+// TableName pins the table to the name the migration created, overriding
+// gorm's default pluralization ("ping_rows") for this struct name.
+func (pingRow) TableName() string {
+	return "pings"
+}
+
 type pingResponse struct {
 	Message string    `json:"message"`
 	Time    time.Time `json:"time"`
