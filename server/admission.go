@@ -54,26 +54,28 @@ func (b *admitter) run(ctx context.Context) {
 
 	var pending []*admissionRequest
 
-	flush := func() {
+	flush := func(flushCtx context.Context) {
 		if len(pending) == 0 {
 			return
 		}
-		b.processBatch(ctx, pending)
+		b.processBatch(flushCtx, pending)
 		pending = nil
 	}
 
 	for {
 		select {
 		case <-ctx.Done():
-			flush()
+			// ctx is already cancelled here, so process any pending requests against a fresh context instead
+			// of one that would make their balance-lock transaction fail immediately.
+			flush(context.Background())
 			return
 		case req := <-b.in:
 			pending = append(pending, req)
 			if len(pending) >= b.maxSize {
-				flush()
+				flush(ctx)
 			}
 		case <-ticker.C:
-			flush()
+			flush(ctx)
 		}
 	}
 }

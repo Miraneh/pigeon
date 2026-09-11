@@ -114,25 +114,45 @@ func (d *dispatcher) dropExpired(batch []dispatchItem) []dispatchItem {
 	return kept
 }
 
-// finalize releases the balance_locks amount for every (identity, hour bucket) represented in batch, since the operator
-// has confirmed it. This is not an update on the identity's balance as that has already been handled.
+// finalize releases the balance_locks amount and records report_stats for every (identity, hour bucket) represented
+// in batch, since the operator has confirmed it. This is not an update on the identity's balance as that has already
+// been handled.
 func (d *dispatcher) finalize(ctx context.Context, batch []dispatchItem) error {
 	type key struct {
 		identityID int64
 		hourBucket time.Time
 	}
+	type stats struct {
+		sent   int64
+		amount int64
+	}
 
-	spend := make(map[key]int64)
+	byKey := make(map[key]stats)
 	for _, item := range batch {
-		spend[key{item.identityID, item.hourBucket}] += item.cost
+		k := key{item.identityID, item.hourBucket}
+		s := byKey[k]
+		s.sent++
+		s.amount += item.cost
+		byKey[k] = s
 	}
 
 	return d.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		for k, amount := range spend {
+		for k, s := range byKey {
 			if err := tx.Exec(`
 				UPDATE balance_locks SET amount = GREATEST(amount - ?, 0)
 				WHERE identity_id = ? AND hour_bucket = ?
-			`, amount, k.identityID, k.hourBucket).Error; err != nil {
+			`, s.amount, k.identityID, k.hourBucket).Error; err != nil {
+				return err
+			}
+
+			if err := tx.Exec(`
+				INSERT INTO report_stats (identity_id, hour_bucket, messages_sent, amount_spent)
+				VALUES (?, ?, ?, ?)
+				ON CONFLICT (identity_id, hour_bucket)
+				DO UPDATE SET
+					messages_sent = report_stats.messages_sent + EXCLUDED.messages_sent,
+					amount_spent = report_stats.amount_spent + EXCLUDED.amount_spent
+			`, k.identityID, k.hourBucket, s.sent, s.amount).Error; err != nil {
 				return err
 			}
 		}

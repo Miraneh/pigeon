@@ -164,6 +164,7 @@ func newRouter(db *gorm.DB, admission *admitter) *gin.Engine {
 	r.GET("/ping", pingHandler)
 	r.GET("/identities/:id", identityBalance(db))
 	r.POST("/identities/:id/topup", identityTopup(db))
+	r.GET("/identities/:id/report", identityReport(db))
 	r.GET("/swagger/*any", ginswagger.WrapHandler(swaggerfiles.Handler))
 
 	return r
