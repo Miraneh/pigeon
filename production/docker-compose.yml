@@ -19,6 +19,12 @@ services:
     build:
       context: ..
       dockerfile: production/Dockerfile
+      target: server
+      args:
+        HTTP_PROXY: ${HTTP_PROXY:-}
+        HTTPS_PROXY: ${HTTPS_PROXY:-}
+        http_proxy: ${http_proxy:-}
+        https_proxy: ${https_proxy:-}
     command:
       - --app-port=8080
       - --db-host=db
@@ -32,6 +38,25 @@ services:
     depends_on:
       db:
         condition: service_healthy
+
+  # reaper is a cronjob which is invoked hourly by cron/k8s CronJob in production. This loop just gives `docker compose up` a way to exercise it here.
+  reaper:
+    build:
+      context: ..
+      dockerfile: production/Dockerfile
+      target: reaper
+      args:
+        HTTP_PROXY: ${HTTP_PROXY:-}
+        HTTPS_PROXY: ${HTTPS_PROXY:-}
+        http_proxy: ${http_proxy:-}
+        https_proxy: ${https_proxy:-}
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - "while true; do /app/reaper --db-host=db --db-port=5432 --db-user=pigeon --db-password=pigeon --db-name=pigeon --db-sslmode=disable --expiry=3h; sleep 3600; done"
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
 
 volumes:
   db-data:
