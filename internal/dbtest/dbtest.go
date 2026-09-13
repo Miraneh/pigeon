@@ -10,7 +10,6 @@ import (
 
 	"github.com/testcontainers/testcontainers-go"
 	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
-	"github.com/testcontainers/testcontainers-go/wait"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 	gormlogger "gorm.io/gorm/logger"
@@ -32,7 +31,7 @@ func Main(m *testing.M) int {
 		tcpostgres.WithDatabase("pigeon"),
 		tcpostgres.WithUsername("pigeon"),
 		tcpostgres.WithPassword("pigeon"),
-		testcontainers.WithWaitStrategy(wait.ForListeningPort("5432/tcp").WithStartupTimeout(30*time.Second)),
+		tcpostgres.BasicWaitStrategies(),
 	)
 	if err != nil {
 		testDBSkipMsg = fmt.Sprintf("could not start postgres test container (is Docker running?): %v", err)
