@@ -1,15 +1,20 @@
-package main
+package database_test
 
-import "testing"
+import (
+	"testing"
+
+	"pigeon/internal/database"
+	"pigeon/internal/dbtest"
+)
 
 func TestRunMigrations_InvalidURLReturnsError(t *testing.T) {
-	if err := runMigrations("not-a-real-scheme://nowhere"); err == nil {
-		t.Fatal("runMigrations() with an invalid URL, want error, got nil")
+	if err := database.RunMigrations("not-a-real-scheme://nowhere"); err == nil {
+		t.Fatal("RunMigrations() with an invalid URL, want error, got nil")
 	}
 }
 
 func TestRunMigrations_AppliesSchemaAndIsIdempotent(t *testing.T) {
-	db := openTestDB(t) // already applies migrations once for this test binary run
+	db := dbtest.Open(t) // already applies migrations once for this test binary run.
 
 	var tableCount int64
 	err := db.Raw(
@@ -22,7 +27,7 @@ func TestRunMigrations_AppliesSchemaAndIsIdempotent(t *testing.T) {
 		t.Fatalf("found %d of the expected tables, want 2", tableCount)
 	}
 
-	if err := runMigrations(testDatabaseURL()); err != nil {
-		t.Fatalf("re-running runMigrations() on an up-to-date schema: %v", err)
+	if err := database.RunMigrations(dbtest.URL()); err != nil {
+		t.Fatalf("re-running RunMigrations() on an up-to-date schema: %v", err)
 	}
 }

@@ -1,4 +1,4 @@
-package main
+package httpapi
 
 import (
 	"context"
@@ -9,6 +9,8 @@ import (
 	"net/url"
 	"testing"
 	"time"
+
+	"pigeon/internal/dbtest"
 )
 
 func doReportRequest(t *testing.T, r http.Handler, path string) *httptest.ResponseRecorder {
@@ -20,19 +22,19 @@ func doReportRequest(t *testing.T, r http.Handler, path string) *httptest.Respon
 }
 
 func TestIdentityReport_ReturnsBucketsSortedWithTotal(t *testing.T) {
-	db := openTestDB(t)
-	seedIdentity(t, db, 1, 0)
-	seedIdentity(t, db, 2, 0)
+	db := dbtest.Open(t)
+	dbtest.SeedIdentity(t, db, 1, 0)
+	dbtest.SeedIdentity(t, db, 2, 0)
 
 	base := time.Now().UTC().Truncate(time.Hour).Add(-3 * time.Hour)
 	before, first, second := base, base.Add(time.Hour), base.Add(2*time.Hour)
 
-	seedReportStats(t, db, 1, before, 100, 1000) // outside the query window
-	seedReportStats(t, db, 1, second, 5, 50)     // seeded out of order on purpose
-	seedReportStats(t, db, 1, first, 3, 30)
-	seedReportStats(t, db, 2, first, 9, 90) // different identity, must not leak in
+	dbtest.SeedReportStats(t, db, 1, before, 100, 1000) // outside the query window
+	dbtest.SeedReportStats(t, db, 1, second, 5, 50)     // seeded out of order on purpose
+	dbtest.SeedReportStats(t, db, 1, first, 3, 30)
+	dbtest.SeedReportStats(t, db, 2, first, 9, 90) // different identity, must not leak in
 
-	r := newRouter(db, newAdmitterForTest(db, time.Hour, 100))
+	r := newTestRouter(db)
 	path := fmt.Sprintf("/identities/1/report?start=%s&end=%s",
 		url.QueryEscape(first.Format(time.RFC3339)), url.QueryEscape(second.Format(time.RFC3339)))
 	w := doReportRequest(t, r, path)
@@ -67,13 +69,13 @@ func TestIdentityReport_ReturnsBucketsSortedWithTotal(t *testing.T) {
 }
 
 func TestIdentityReport_NoActivityReturnsEmptyBuckets(t *testing.T) {
-	db := openTestDB(t)
-	seedIdentity(t, db, 1, 0)
+	db := dbtest.Open(t)
+	dbtest.SeedIdentity(t, db, 1, 0)
 
 	start := time.Now().UTC().Truncate(time.Hour)
 	end := start.Add(time.Hour)
 
-	r := newRouter(db, newAdmitterForTest(db, time.Hour, 100))
+	r := newTestRouter(db)
 	path := fmt.Sprintf("/identities/1/report?start=%s&end=%s",
 		url.QueryEscape(start.Format(time.RFC3339)), url.QueryEscape(end.Format(time.RFC3339)))
 	w := doReportRequest(t, r, path)
@@ -95,7 +97,7 @@ func TestIdentityReport_NoActivityReturnsEmptyBuckets(t *testing.T) {
 }
 
 func TestIdentityReport_InvalidID(t *testing.T) {
-	r := newRouter(nil, newAdmitterForTest(nil, time.Hour, 100))
+	r := newTestRouter(nil)
 	w := doReportRequest(t, r, "/identities/not-a-number/report?start=2026-01-01T00:00:00Z&end=2026-01-02T00:00:00Z")
 
 	if w.Code != http.StatusBadRequest {
@@ -104,7 +106,7 @@ func TestIdentityReport_InvalidID(t *testing.T) {
 }
 
 func TestIdentityReport_InvalidStart(t *testing.T) {
-	r := newRouter(nil, newAdmitterForTest(nil, time.Hour, 100))
+	r := newTestRouter(nil)
 	w := doReportRequest(t, r, "/identities/1/report?start=not-a-time&end=2026-01-02T00:00:00Z")
 
 	if w.Code != http.StatusBadRequest {
@@ -113,7 +115,7 @@ func TestIdentityReport_InvalidStart(t *testing.T) {
 }
 
 func TestIdentityReport_InvalidEnd(t *testing.T) {
-	r := newRouter(nil, newAdmitterForTest(nil, time.Hour, 100))
+	r := newTestRouter(nil)
 	w := doReportRequest(t, r, "/identities/1/report?start=2026-01-01T00:00:00Z&end=not-a-time")
 
 	if w.Code != http.StatusBadRequest {
@@ -122,7 +124,7 @@ func TestIdentityReport_InvalidEnd(t *testing.T) {
 }
 
 func TestIdentityReport_EndBeforeStartRejected(t *testing.T) {
-	r := newRouter(nil, newAdmitterForTest(nil, time.Hour, 100))
+	r := newTestRouter(nil)
 	w := doReportRequest(t, r, "/identities/1/report?start=2026-01-02T00:00:00Z&end=2026-01-01T00:00:00Z")
 
 	if w.Code != http.StatusBadRequest {

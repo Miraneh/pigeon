@@ -1,4 +1,5 @@
-package main
+// Package reap refunds and clears stale balance locks.
+package reap
 
 import (
 	"context"
@@ -13,10 +14,10 @@ type staleLock struct {
 	HourBucket time.Time
 }
 
-// reap finds every balance_locks row whose hour_bucket is older than expiry, refunds any amount still held on it
+// Run finds every balance_locks row whose hour_bucket is older than expiry, refunds any amount still held on it
 // back onto the identity's balance, and deletes the row, one transaction per row. It returns how many rows had
 // a nonzero amount refunded.
-func reap(ctx context.Context, db *gorm.DB, expiry time.Duration) (int, error) {
+func Run(ctx context.Context, db *gorm.DB, expiry time.Duration) (int, error) {
 	cutoff := time.Now().UTC().Add(-expiry)
 
 	var staleLocks []staleLock

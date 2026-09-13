@@ -1,4 +1,4 @@
-package main
+package database
 
 import (
 	"errors"
@@ -10,7 +10,7 @@ import (
 	"pigeon/migrations"
 )
 
-func runMigrations(databaseURL string) error {
+func RunMigrations(databaseURL string) error {
 	source, err := iofs.New(migrations.FS, ".")
 	if err != nil {
 		return err

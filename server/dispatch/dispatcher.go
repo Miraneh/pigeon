@@ -1,61 +1,68 @@
-package main
+// Package dispatch batches admitted messages and hands them to the operator.
+package dispatch
 
 import (
 	"context"
-	"flag"
 	"log/slog"
 	"time"
 
 	"gorm.io/gorm"
 )
 
-var (
-	expressWindowFlag  = flag.Duration("express-window", 500*time.Millisecond, "express dispatch flush interval")
-	expressMaxSizeFlag = flag.Int("express-max-size", 300, "express dispatch max batch size")
-	regularWindowFlag  = flag.Duration("regular-window", time.Second, "regular dispatch flush interval")
-	regularMaxSizeFlag = flag.Int("regular-max-size", 1000, "regular dispatch max batch size")
+// Item is one accepted, paid message waiting to be sent to the operator. HourBucket + Cost identify which balance_locks
+// row to release once the operator confirms delivery.
+type Item struct {
+	IdentityID int64
+	HourBucket time.Time
+	To         string
+	Text       string
+	Cost       int64
+	ReceivedAt time.Time
+}
 
-	expiryFlag = flag.Duration(
-		"expiry", 3*time.Hour, "how long a message may wait before being dropped undelivered",
-	)
-	operatorTimeoutFlag = flag.Duration(
-		"operator-timeout", 500*time.Millisecond, "bound on one operator call, well above its own p99.9",
-	)
-)
+// Operator is what the dispatcher sends confirmed-paid batches to.
+type Operator interface {
+	Send(ctx context.Context, batch []Item) error
+}
 
-// dispatcher batches accepted messages from one channel (express or regular) and hands them to the operator. Each
+type Config struct {
+	Window          time.Duration
+	MaxSize         int
+	Expiry          time.Duration
+	OperatorTimeout time.Duration
+}
+
+// Dispatcher batches accepted messages from one channel (express or regular) and hands them to the operator. Each
 // flushed batch is passed to its own goroutine so one delivery attempt never blocks new batches from forming.
 //
 // There is deliberately no retry on failure due to the SLA between us and the operator and the possibility of us either
 // breaking the contract by sending more rps than declared or violating our own system availability.
-type dispatcher struct {
+type Dispatcher struct {
 	name    string
-	in      <-chan dispatchItem
+	in      <-chan Item
 	window  time.Duration
 	maxSize int
 
 	expiry          time.Duration
 	operatorTimeout time.Duration
 
-	operator operatorClient
+	operator Operator
 	db       *gorm.DB
 }
 
-func newDispatcher(
-	name string, in <-chan dispatchItem, window time.Duration, maxSize int, db *gorm.DB, operator operatorClient,
-) *dispatcher {
-	return &dispatcher{
-		name: name, in: in, window: window, maxSize: maxSize,
-		expiry: *expiryFlag, operatorTimeout: *operatorTimeoutFlag,
+func New(name string, cfg Config, in <-chan Item, db *gorm.DB, operator Operator) *Dispatcher {
+	return &Dispatcher{
+		name: name, in: in, window: cfg.Window, maxSize: cfg.MaxSize,
+		expiry: cfg.Expiry, operatorTimeout: cfg.OperatorTimeout,
 		operator: operator, db: db,
 	}
 }
 
-func (d *dispatcher) run(ctx context.Context) {
+func (d *Dispatcher) Run(ctx context.Context) {
 	ticker := time.NewTicker(d.window)
 	defer ticker.Stop()
 
-	var pending []dispatchItem
+	var pending []Item
 
 	for {
 		select {
@@ -81,7 +88,7 @@ func (d *dispatcher) run(ctx context.Context) {
 
 // deliver makes exactly one attempt to hand batch to the operator, limited to `operatorTimeout`. On any failure,
 // the batch is dropped.
-func (d *dispatcher) deliver(batch []dispatchItem) {
+func (d *Dispatcher) deliver(batch []Item) {
 	batch = d.dropExpired(batch)
 	if len(batch) == 0 {
 		return
@@ -103,11 +110,11 @@ func (d *dispatcher) deliver(batch []dispatchItem) {
 	}
 }
 
-func (d *dispatcher) dropExpired(batch []dispatchItem) []dispatchItem {
+func (d *Dispatcher) dropExpired(batch []Item) []Item {
 	now := time.Now()
 	kept := batch[:0]
 	for _, item := range batch {
-		if now.Sub(item.receivedAt) <= d.expiry {
+		if now.Sub(item.ReceivedAt) <= d.expiry {
 			kept = append(kept, item)
 		}
 	}
@@ -115,9 +122,8 @@ func (d *dispatcher) dropExpired(batch []dispatchItem) []dispatchItem {
 }
 
 // finalize releases the balance_locks amount and records report_stats for every (identity, hour bucket) represented
-// in batch, since the operator has confirmed it. This is not an update on the identity's balance as that has already
-// been handled.
-func (d *dispatcher) finalize(ctx context.Context, batch []dispatchItem) error {
+// in batch, since the operator has confirmed it.
+func (d *Dispatcher) finalize(ctx context.Context, batch []Item) error {
 	type key struct {
 		identityID int64
 		hourBucket time.Time
@@ -129,10 +135,10 @@ func (d *dispatcher) finalize(ctx context.Context, batch []dispatchItem) error {
 
 	byKey := make(map[key]stats)
 	for _, item := range batch {
-		k := key{item.identityID, item.hourBucket}
+		k := key{item.IdentityID, item.HourBucket}
 		s := byKey[k]
 		s.sent++
-		s.amount += item.cost
+		s.amount += item.Cost
 		byKey[k] = s
 	}
 

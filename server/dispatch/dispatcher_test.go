@@ -1,37 +1,47 @@
-package main
+package dispatch
 
 import (
 	"context"
+	"errors"
+	"os"
 	"sync"
 	"testing"
 	"time"
+
+	"pigeon/internal/dbtest"
 )
 
-// spyOperator records every batch it receives and can be made to fail deterministically.
-type spyOperator struct {
+func TestMain(m *testing.M) {
+	os.Exit(dbtest.Main(m))
+}
+
+var errSend = errors.New("send failed")
+
+// fakeOperator records every batch it receives and can be made to fail deterministically.
+type fakeOperator struct {
 	mu      sync.Mutex
-	calls   [][]dispatchItem
+	calls   [][]Item
 	sendErr error
 }
 
-func (s *spyOperator) Send(_ context.Context, batch []dispatchItem) error {
+func (s *fakeOperator) Send(_ context.Context, batch []Item) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	cp := make([]dispatchItem, len(batch))
+	cp := make([]Item, len(batch))
 	copy(cp, batch)
 	s.calls = append(s.calls, cp)
 
 	return s.sendErr
 }
 
-func (s *spyOperator) callCount() int {
+func (s *fakeOperator) callCount() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return len(s.calls)
 }
 
-func (s *spyOperator) lastBatch() []dispatchItem {
+func (s *fakeOperator) lastBatch() []Item {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if len(s.calls) == 0 {
@@ -40,14 +50,28 @@ func (s *spyOperator) lastBatch() []dispatchItem {
 	return s.calls[len(s.calls)-1]
 }
 
+// waitFor polls cond until it returns true or timeout happens, failing the test otherwise. Used for assertions against
+// work done in a background goroutine (e.g. an async dispatch flush).
+func waitFor(t *testing.T, cond func() bool, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if cond() {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatalf("condition not met within %v", timeout)
+}
+
 func TestDispatcher_DropExpired(t *testing.T) {
 	now := time.Now()
-	d := &dispatcher{expiry: time.Minute}
+	d := &Dispatcher{expiry: time.Minute}
 
-	batch := []dispatchItem{
-		{identityID: 1, receivedAt: now},
-		{identityID: 2, receivedAt: now.Add(-2 * time.Minute)},
-		{identityID: 3, receivedAt: now.Add(-30 * time.Second)},
+	batch := []Item{
+		{IdentityID: 1, ReceivedAt: now},
+		{IdentityID: 2, ReceivedAt: now.Add(-2 * time.Minute)},
+		{IdentityID: 3, ReceivedAt: now.Add(-30 * time.Second)},
 	}
 
 	kept := d.dropExpired(batch)
@@ -56,17 +80,17 @@ func TestDispatcher_DropExpired(t *testing.T) {
 		t.Fatalf("dropExpired() kept %d items, want 2: %+v", len(kept), kept)
 	}
 	for _, item := range kept {
-		if item.identityID == 2 {
+		if item.IdentityID == 2 {
 			t.Fatalf("dropExpired() kept expired item %+v", item)
 		}
 	}
 }
 
 func TestDispatcher_Deliver_AllExpiredSkipsOperator(t *testing.T) {
-	op := &spyOperator{}
-	d := &dispatcher{expiry: time.Minute, operatorTimeout: time.Second, operator: op}
+	op := &fakeOperator{}
+	d := &Dispatcher{expiry: time.Minute, operatorTimeout: time.Second, operator: op}
 
-	d.deliver([]dispatchItem{{receivedAt: time.Now().Add(-time.Hour)}})
+	d.deliver([]Item{{ReceivedAt: time.Now().Add(-time.Hour)}})
 
 	if op.callCount() != 0 {
 		t.Fatalf("operator.Send called %d times, want 0", op.callCount())
@@ -74,11 +98,11 @@ func TestDispatcher_Deliver_AllExpiredSkipsOperator(t *testing.T) {
 }
 
 func TestDispatcher_Deliver_OperatorFailureSkipsFinalize(t *testing.T) {
-	op := &spyOperator{sendErr: errOperatorUnavailable}
-	d := &dispatcher{name: "test", expiry: time.Hour, operatorTimeout: time.Second, operator: op}
+	op := &fakeOperator{sendErr: errSend}
+	d := &Dispatcher{name: "test", expiry: time.Hour, operatorTimeout: time.Second, operator: op}
 
 	// db is intentionally left nil: finalize must not be reached when Send fails, or this would panic.
-	d.deliver([]dispatchItem{{receivedAt: time.Now()}})
+	d.deliver([]Item{{ReceivedAt: time.Now()}})
 
 	if op.callCount() != 1 {
 		t.Fatalf("operator.Send called %d times, want 1", op.callCount())
@@ -86,18 +110,18 @@ func TestDispatcher_Deliver_OperatorFailureSkipsFinalize(t *testing.T) {
 }
 
 func TestDispatcher_Deliver_SuccessFinalizesBalanceLocks(t *testing.T) {
-	db := openTestDB(t)
+	db := dbtest.Open(t)
 
 	hourBucket := time.Now().UTC().Truncate(time.Hour)
-	seedIdentity(t, db, 1, 100)
-	seedBalanceLock(t, db, 1, hourBucket, 40)
+	dbtest.SeedIdentity(t, db, 1, 100)
+	dbtest.SeedBalanceLock(t, db, 1, hourBucket, 40)
 
-	op := &spyOperator{}
-	d := &dispatcher{name: "test", expiry: time.Hour, operatorTimeout: time.Second, operator: op, db: db}
+	op := &fakeOperator{}
+	d := &Dispatcher{name: "test", expiry: time.Hour, operatorTimeout: time.Second, operator: op, db: db}
 
-	batch := []dispatchItem{
-		{identityID: 1, hourBucket: hourBucket, cost: 15, receivedAt: time.Now()},
-		{identityID: 1, hourBucket: hourBucket, cost: 10, receivedAt: time.Now()},
+	batch := []Item{
+		{IdentityID: 1, HourBucket: hourBucket, Cost: 15, ReceivedAt: time.Now()},
+		{IdentityID: 1, HourBucket: hourBucket, Cost: 10, ReceivedAt: time.Now()},
 	}
 	d.deliver(batch)
 
@@ -105,20 +129,20 @@ func TestDispatcher_Deliver_SuccessFinalizesBalanceLocks(t *testing.T) {
 		t.Fatalf("operator.Send called %d times, want 1", op.callCount())
 	}
 
-	if got, want := balanceLockAmount(t, db, 1, hourBucket), int64(15); got != want {
+	if got, want := dbtest.BalanceLockAmount(t, db, 1, hourBucket), int64(15); got != want {
 		t.Fatalf("balance_locks.amount = %d, want %d", got, want)
 	}
 
-	sent, spent := reportStatsOf(t, db, 1, hourBucket)
+	sent, spent := dbtest.ReportStats(t, db, 1, hourBucket)
 	if sent != 2 || spent != 25 {
 		t.Fatalf("report_stats = (sent=%d, spent=%d), want (sent=2, spent=25)", sent, spent)
 	}
 }
 
 func TestDispatcher_Run_BatchesUpToMaxSize(t *testing.T) {
-	op := &spyOperator{sendErr: errOperatorUnavailable} // failing operator: never reaches finalize/db
-	in := make(chan dispatchItem, 10)
-	d := &dispatcher{
+	op := &fakeOperator{sendErr: errSend} // failing operator: never reaches finalize/db.
+	in := make(chan Item, 10)
+	d := &Dispatcher{
 		name: "test", in: in, window: time.Hour, maxSize: 3,
 		expiry: time.Hour, operatorTimeout: time.Second, operator: op,
 	}
@@ -126,12 +150,12 @@ func TestDispatcher_Run_BatchesUpToMaxSize(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() {
-		d.run(ctx)
+		d.Run(ctx)
 		close(done)
 	}()
 
 	for i := range 3 {
-		in <- dispatchItem{identityID: int64(i), receivedAt: time.Now()}
+		in <- Item{IdentityID: int64(i), ReceivedAt: time.Now()}
 	}
 
 	waitFor(t, func() bool { return op.callCount() == 1 }, time.Second)
@@ -144,9 +168,9 @@ func TestDispatcher_Run_BatchesUpToMaxSize(t *testing.T) {
 }
 
 func TestDispatcher_Run_FlushesOnWindowTicker(t *testing.T) {
-	op := &spyOperator{sendErr: errOperatorUnavailable}
-	in := make(chan dispatchItem, 10)
-	d := &dispatcher{
+	op := &fakeOperator{sendErr: errSend}
+	in := make(chan Item, 10)
+	d := &Dispatcher{
 		name: "test", in: in, window: 10 * time.Millisecond, maxSize: 100,
 		expiry: time.Hour, operatorTimeout: time.Second, operator: op,
 	}
@@ -154,11 +178,11 @@ func TestDispatcher_Run_FlushesOnWindowTicker(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() {
-		d.run(ctx)
+		d.Run(ctx)
 		close(done)
 	}()
 
-	in <- dispatchItem{identityID: 1, receivedAt: time.Now()}
+	in <- Item{IdentityID: 1, ReceivedAt: time.Now()}
 
 	waitFor(t, func() bool { return op.callCount() == 1 }, time.Second)
 	if got := len(op.lastBatch()); got != 1 {
@@ -170,9 +194,9 @@ func TestDispatcher_Run_FlushesOnWindowTicker(t *testing.T) {
 }
 
 func TestDispatcher_Run_FlushesPendingOnContextCancel(t *testing.T) {
-	op := &spyOperator{sendErr: errOperatorUnavailable}
-	in := make(chan dispatchItem, 10)
-	d := &dispatcher{
+	op := &fakeOperator{sendErr: errSend}
+	in := make(chan Item, 10)
+	d := &Dispatcher{
 		name: "test", in: in, window: time.Hour, maxSize: 100,
 		expiry: time.Hour, operatorTimeout: time.Second, operator: op,
 	}
@@ -181,18 +205,18 @@ func TestDispatcher_Run_FlushesPendingOnContextCancel(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		d.run(ctx)
+		d.Run(ctx)
 		close(done)
 	}()
 
-	in <- dispatchItem{identityID: 1, receivedAt: time.Now()}
-	time.Sleep(20 * time.Millisecond) // let it land in `pending` before cancelling
+	in <- Item{IdentityID: 1, ReceivedAt: time.Now()}
+	time.Sleep(20 * time.Millisecond) // let it land in `pending` before cancelling.
 	cancel()
 
 	select {
 	case <-done:
 	case <-time.After(time.Second):
-		t.Fatal("run() did not return after ctx cancellation")
+		t.Fatal("Run() did not return after ctx cancellation")
 	}
 
 	if op.callCount() != 1 {
