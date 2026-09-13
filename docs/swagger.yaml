@@ -4,8 +4,11 @@ paths:
   /identities/{id}:
     get:
       responses: {}
-  /identities/{id}/topup:
+  /identities/{id}/balance/increase:
     post:
+      responses: {}
+  /identities/{id}/report:
+    get:
       responses: {}
   /messages:
     post:

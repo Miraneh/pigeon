@@ -20,8 +20,13 @@ const docTemplate = `{
                 "responses": {}
             }
         },
-        "/identities/{id}/topup": {
+        "/identities/{id}/balance/increase": {
             "post": {
+                "responses": {}
+            }
+        },
+        "/identities/{id}/report": {
+            "get": {
                 "responses": {}
             }
         },
