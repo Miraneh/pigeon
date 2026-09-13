@@ -75,7 +75,7 @@ func Open(t *testing.T) *gorm.DB {
 		t.Fatalf("connect to test postgres: %v", err)
 	}
 
-	stmt := `TRUNCATE TABLE report_stats, balance_locks, identities RESTART IDENTITY CASCADE`
+	stmt := `TRUNCATE TABLE balance_increases, report_stats, balance_locks, identities RESTART IDENTITY CASCADE`
 	if err := db.Exec(stmt).Error; err != nil {
 		t.Fatalf("truncate test tables: %v", err)
 	}

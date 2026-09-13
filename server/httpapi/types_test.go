@@ -55,7 +55,7 @@ func TestSendRequest_ExpressDefaultsFalse(t *testing.T) {
 	}
 }
 
-func TestTopupRequest_Binding(t *testing.T) {
+func TestIncreaseBalanceRequest_Binding(t *testing.T) {
 	tests := []struct {
 		name    string
 		body    string
@@ -69,7 +69,7 @@ func TestTopupRequest_Binding(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			var req topupRequest
+			var req increaseBalanceRequest
 			err := bindJSON(t, tt.body, &req)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("bind error = %v, wantErr %v", err, tt.wantErr)

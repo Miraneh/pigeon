@@ -82,39 +82,6 @@ func identityBalance(db *gorm.DB) gin.HandlerFunc {
 	}
 }
 
-type topupRequest struct {
-	Amount int64 `binding:"required,gt=0" json:"amount"`
-}
-
-// identityTopup is a helper for crediting balance until the user/ component exists.
-// @Router /identities/{id}/topup [post]
-func identityTopup(db *gorm.DB) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		id, err := strconv.ParseInt(c.Param("id"), 10, 64)
-		if err != nil {
-			c.JSON(http.StatusBadRequest, errorResponse{Error: "invalid id"})
-			return
-		}
-
-		var body topupRequest
-		if err := c.ShouldBindJSON(&body); err != nil {
-			c.JSON(http.StatusBadRequest, errorResponse{Error: err.Error()})
-			return
-		}
-
-		err = db.Exec(`
-			INSERT INTO identities (id, balance) VALUES (?, ?)
-			ON CONFLICT (id) DO UPDATE SET balance = identities.balance + EXCLUDED.balance
-		`, id, body.Amount).Error
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, errorResponse{Error: err.Error()})
-			return
-		}
-
-		c.JSON(http.StatusOK, gin.H{"identity_id": id, "credited": body.Amount})
-	}
-}
-
 // NewRouter wires the HTTP routes. sendTimeout bounds how long POST /messages waits for its batch result.
 func NewRouter(db *gorm.DB, admitter *admission.Admitter, sendTimeout time.Duration) *gin.Engine {
 	r := gin.Default()
@@ -124,7 +91,7 @@ func NewRouter(db *gorm.DB, admitter *admission.Admitter, sendTimeout time.Durat
 	r.POST("/messages", send.sendMessages)
 	r.GET("/ping", pingHandler)
 	r.GET("/identities/:id", identityBalance(db))
-	r.POST("/identities/:id/topup", identityTopup(db))
+	r.POST("/identities/:id/balance/increase", identityIncreaseBalance(db))
 	r.GET("/identities/:id/report", identityReport(db))
 	r.GET("/swagger/*any", ginswagger.WrapHandler(swaggerfiles.Handler))
 
