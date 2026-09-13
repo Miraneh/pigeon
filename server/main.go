@@ -36,7 +36,7 @@ var (
 	expressWindowFlag  = flag.Duration("express-window", 500*time.Millisecond, "express dispatch flush interval")
 	expressMaxSizeFlag = flag.Int("express-max-size", 300, "express dispatch max batch size")
 	regularWindowFlag  = flag.Duration("regular-window", time.Second, "regular dispatch flush interval")
-	regularMaxSizeFlag = flag.Int("regular-max-size", 1000, "regular dispatch max batch size")
+	regularMaxSizeFlag = flag.Int("regular-max-size", 600, "regular dispatch max batch size")
 
 	expiryFlag = flag.Duration(
 		"expiry", 3*time.Hour, "how long a message may wait before being dropped undelivered",
