@@ -97,15 +97,80 @@ func TestDispatcher_Deliver_AllExpiredSkipsOperator(t *testing.T) {
 	}
 }
 
-func TestDispatcher_Deliver_OperatorFailureSkipsFinalize(t *testing.T) {
-	op := &fakeOperator{sendErr: errSend}
-	d := &Dispatcher{name: "test", expiry: time.Hour, operatorTimeout: time.Second, operator: op}
+func TestDispatcher_Deliver_OperatorFailureRefundsBalanceLocks(t *testing.T) {
+	db := dbtest.Open(t)
 
-	// db is intentionally left nil: finalize must not be reached when Send fails, or this would panic.
-	d.deliver([]Item{{ReceivedAt: time.Now()}})
+	hourBucket := time.Now().UTC().Truncate(time.Hour)
+	dbtest.SeedIdentity(t, db, 1, 100)
+	dbtest.SeedBalanceLock(t, db, 1, hourBucket, 40)
+	dbtest.SeedIdentity(t, db, 2, 0)
+	dbtest.SeedBalanceLock(t, db, 2, hourBucket, 5)
+
+	op := &fakeOperator{sendErr: errSend}
+	d := &Dispatcher{name: "test", expiry: time.Hour, operatorTimeout: time.Second, operator: op, db: db}
+
+	batch := []Item{
+		{IdentityID: 1, HourBucket: hourBucket, Cost: 15, ReceivedAt: time.Now()},
+		{IdentityID: 2, HourBucket: hourBucket, Cost: 5, ReceivedAt: time.Now()},
+		{IdentityID: 1, HourBucket: hourBucket, Cost: 10, ReceivedAt: time.Now()},
+	}
+	d.deliver(batch)
 
 	if op.callCount() != 1 {
 		t.Fatalf("operator.Send called %d times, want 1", op.callCount())
+	}
+
+	if got, want := dbtest.BalanceLockAmount(t, db, 1, hourBucket), int64(15); got != want {
+		t.Fatalf("identity 1 balance_locks.amount = %d, want %d", got, want)
+	}
+	if got, want := dbtest.IdentityBalance(t, db, 1), int64(125); got != want {
+		t.Fatalf("identity 1 balance = %d, want %d", got, want)
+	}
+	if got, want := dbtest.BalanceLockAmount(t, db, 2, hourBucket), int64(0); got != want {
+		t.Fatalf("identity 2 balance_locks.amount = %d, want %d", got, want)
+	}
+	if got, want := dbtest.IdentityBalance(t, db, 2), int64(5); got != want {
+		t.Fatalf("identity 2 balance = %d, want %d", got, want)
+	}
+
+	var reports int64
+	if err := db.Raw(`SELECT count(*) FROM report_stats`).Scan(&reports).Error; err != nil {
+		t.Fatalf("count report_stats: %v", err)
+	}
+	if reports != 0 {
+		t.Fatalf("report_stats has %d rows after a failed send, want 0", reports)
+	}
+}
+
+func TestDispatcher_Deliver_OperatorFailureRefundCappedAtLockedAmount(t *testing.T) {
+	db := dbtest.Open(t)
+
+	hourBucket := time.Now().UTC().Truncate(time.Hour)
+	dbtest.SeedIdentity(t, db, 1, 100)
+	dbtest.SeedBalanceLock(t, db, 1, hourBucket, 10)
+	// identity 2's lock row was already refunded and cleared by the reaper.
+	dbtest.SeedIdentity(t, db, 2, 50)
+
+	op := &fakeOperator{sendErr: errSend}
+	d := &Dispatcher{name: "test", expiry: time.Hour, operatorTimeout: time.Second, operator: op, db: db}
+
+	batch := []Item{
+		{IdentityID: 1, HourBucket: hourBucket, Cost: 25, ReceivedAt: time.Now()},
+		{IdentityID: 2, HourBucket: hourBucket, Cost: 25, ReceivedAt: time.Now()},
+	}
+	d.deliver(batch)
+
+	if got, want := dbtest.BalanceLockAmount(t, db, 1, hourBucket), int64(0); got != want {
+		t.Fatalf("identity 1 balance_locks.amount = %d, want %d", got, want)
+	}
+	if got, want := dbtest.IdentityBalance(t, db, 1), int64(110); got != want {
+		t.Fatalf("identity 1 balance = %d, want %d", got, want)
+	}
+	if dbtest.BalanceLockExists(t, db, 2, hourBucket) {
+		t.Fatal("refund recreated identity 2's cleared balance_locks row")
+	}
+	if got, want := dbtest.IdentityBalance(t, db, 2), int64(50); got != want {
+		t.Fatalf("identity 2 balance = %d, want %d", got, want)
 	}
 }
 

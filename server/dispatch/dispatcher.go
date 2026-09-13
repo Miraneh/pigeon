@@ -2,15 +2,18 @@
 package dispatch
 
 import (
+	"cmp"
 	"context"
 	"log/slog"
+	"maps"
+	"slices"
 	"time"
 
 	"gorm.io/gorm"
 )
 
 // Item is one accepted, paid message waiting to be sent to the operator. HourBucket + Cost identify which balance_locks
-// row to release once the operator confirms delivery.
+// row to release once the operator confirms delivery, or refund if it rejects the batch.
 type Item struct {
 	IdentityID int64
 	HourBucket time.Time
@@ -87,7 +90,7 @@ func (d *Dispatcher) Run(ctx context.Context) {
 }
 
 // deliver makes exactly one attempt to hand batch to the operator, limited to `operatorTimeout`. On any failure,
-// the batch is dropped.
+// the batch is dropped and its locked balance is refunded.
 func (d *Dispatcher) deliver(batch []Item) {
 	batch = d.dropExpired(batch)
 	if len(batch) == 0 {
@@ -98,7 +101,14 @@ func (d *Dispatcher) deliver(batch []Item) {
 	defer cancel()
 
 	if err := d.operator.Send(sendCtx, batch); err != nil {
-		slog.Error("dispatch: operator send failed, dropping batch", "dispatcher", d.name, "error", err)
+		slog.Error("dispatch: operator send failed, refunding batch", "dispatcher", d.name, "error", err)
+
+		refundCtx, cancelRefund := context.WithTimeout(context.Background(), d.operatorTimeout)
+		defer cancelRefund()
+
+		if err := d.refund(refundCtx, batch); err != nil {
+			slog.Error("dispatch: refund failed, leaving it to the reaper", "dispatcher", d.name, "error", err)
+		}
 		return
 	}
 
@@ -121,21 +131,80 @@ func (d *Dispatcher) dropExpired(batch []Item) []Item {
 	return kept
 }
 
+// lockKey identifies one balance_locks row.
+type lockKey struct {
+	identityID int64
+	hourBucket time.Time
+}
+
+// refund returns the balance locked for batch back to each identity, since the operator rejected it. Each refund is
+// capped at what's still locked cause the reaper might have already refunded and cleared that balance_locks row.
+func (d *Dispatcher) refund(ctx context.Context, batch []Item) error {
+	byKey := make(map[lockKey]int64)
+	for _, item := range batch {
+		if item.Cost > 0 {
+			byKey[lockKey{item.IdentityID, item.HourBucket}] += item.Cost
+		}
+	}
+	if len(byKey) == 0 {
+		return nil
+	}
+
+	// Rows are locked in a fixed order so concurrent refunds can't deadlock each other.
+	keys := slices.SortedFunc(maps.Keys(byKey), func(a, b lockKey) int {
+		return cmp.Or(cmp.Compare(a.identityID, b.identityID), a.hourBucket.Compare(b.hourBucket))
+	})
+
+	return d.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		for _, k := range keys {
+			// identities is locked before balance_locks, the same order admission takes them in.
+			if err := tx.Exec(
+				`SELECT 1 FROM identities WHERE id = ? FOR UPDATE`, k.identityID,
+			).Error; err != nil {
+				return err
+			}
+
+			var locked int64
+			if err := tx.Raw(
+				`SELECT amount FROM balance_locks WHERE identity_id = ? AND hour_bucket = ? FOR UPDATE`,
+				k.identityID, k.hourBucket,
+			).Scan(&locked).Error; err != nil {
+				return err
+			}
+
+			amount := min(locked, byKey[k])
+			if amount == 0 {
+				continue
+			}
+
+			if err := tx.Exec(
+				`UPDATE balance_locks SET amount = amount - ? WHERE identity_id = ? AND hour_bucket = ?`,
+				amount, k.identityID, k.hourBucket,
+			).Error; err != nil {
+				return err
+			}
+
+			if err := tx.Exec(
+				`UPDATE identities SET balance = balance + ? WHERE id = ?`, amount, k.identityID,
+			).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
 // finalize releases the balance_locks amount and records report_stats for every (identity, hour bucket) represented
 // in batch, since the operator has confirmed it.
 func (d *Dispatcher) finalize(ctx context.Context, batch []Item) error {
-	type key struct {
-		identityID int64
-		hourBucket time.Time
-	}
 	type stats struct {
 		sent   int64
 		amount int64
 	}
 
-	byKey := make(map[key]stats)
+	byKey := make(map[lockKey]stats)
 	for _, item := range batch {
-		k := key{item.IdentityID, item.HourBucket}
+		k := lockKey{item.IdentityID, item.HourBucket}
 		s := byKey[k]
 		s.sent++
 		s.amount += item.Cost
